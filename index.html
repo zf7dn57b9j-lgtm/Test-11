@@ -29,43 +29,75 @@ function result(){if(finished)return;save();finished=true;clearInterval(clock);l
 
 function visualMethod(q){
  const text=q.question.replace(/,/g,'').trim();
- const divide=text.match(/^(\d+)\s*÷\s*(\d+)\s*=/);
- const col=text.match(/^([\d.]+)\s*([+−×])\s*([\d.]+)\s*=/);
  const isPreview=p&&p.seed===20261123911;
- if(!isPreview)return (q.working||[]).map(s=>`<div class="method-line">${escapeHtml(s)}</div>`).join('');
- const wrap=(title,board,steps,answer,note='')=>`<div class="math-art"><h4>${title}</h4><div class="art-grid"><div class="math-board"><pre>${escapeHtml(board)}</pre></div><ol class="steps">${steps.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ol></div>${note?`<p class="muted-method">${escapeHtml(note)}</p>`:''}<div class="final-answer">Answer: ${escapeHtml(answer)}</div></div>`;
- if(divide){
-  const a=Number(divide[1]),b=Number(divide[2]);
-  if(b>0&&a%b===0&&(b>9||a>=1000)){
-   let digits=String(a),r=0,quot='',steps=[],started=false;
-   for(let i=0;i<digits.length;i++){
-    const v=r*10+Number(digits[i]),d=Math.floor(v/b),rem=v%b;
-    if(started||d){quot+=d;started=true;steps.push(`${v} ÷ ${b} = ${d}, remainder ${rem}${i<digits.length-1?'; bring down '+digits[i+1]:''}.`)}
-    r=rem;
+ const fallback=()=> (q.working||[]).map(s=>`<div class="method-line">${escapeHtml(s)}</div>`).join('');
+ if(!isPreview)return fallback();
+ const wrap=(title,board,steps,answer,note='')=>`<div class="math-art"><h4>${escapeHtml(title)}</h4><div class="art-grid"><div class="math-board"><pre>${escapeHtml(board)}</pre></div><ol class="steps">${steps.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ol></div>${note?`<p class="muted-method">${escapeHtml(note)}</p>`:''}<div class="final-answer">Answer: ${escapeHtml(answer)}</div></div>`;
+ const div=text.match(/^([\d.]+)\s*÷\s*(\d+)\s*=/);
+ if(div){
+  const raw=div[1],b=Number(div[2]),a=Number(raw),ans=a/b;
+  if(b>0&&Number.isFinite(ans)&&Math.abs(ans-Number(q.answer.replace(/,/g,'')))<1e-8){
+   // Small, instantly recalled facts do not need written division.
+   if(!raw.includes('.')&&a<=144&&b<=12&&ans<=12)return wrap('Times-table fact',`${b} × ${ans} = ${a}`,[],q.answer);
+   if(Number.isInteger(ans)&&b<=99){
+    const digits=raw.replace('.','').split(''),decimalAt=raw.includes('.')?raw.indexOf('.'):digits.length;
+    let remainder=0,started=false,quot=Array(digits.length).fill(' '),carry=Array(digits.length).fill(' '),steps=[];
+    for(let i=0;i<digits.length;i++){
+     const value=remainder*10+Number(digits[i]),d=Math.floor(value/b),rem=value%b;
+     if(d||started||i===digits.length-1){quot[i]=String(d);started=true;steps.push(`${value} ÷ ${b} = ${d}, remainder ${rem}${i<digits.length-1?'; carry '+rem+' to the next digit':''}.`)}
+     if(i+1<digits.length&&rem)carry[i+1]=String(rem);
+     remainder=rem;
+    }
+    const insertDecimal=(chars)=>chars.slice(0,decimalAt).join(' ')+(decimalAt<digits.length?' . ':'')+chars.slice(decimalAt).join(' ');
+    const top=insertDecimal(quot),carryRow=insertDecimal(carry),base=insertDecimal(digits);
+    const prefix=' '.repeat(String(b).length+3);
+    const board=`${prefix}${top}\n${prefix}${'─'.repeat(Math.max(top.length,base.length))}\n${String(b).padStart(String(b).length)} ) ${base}\n${prefix}${carryRow}  ← carried remainders`;
+    return wrap('Bus-stop division',board,steps,q.answer,'The small carried numbers belong to the next digit. Each quotient digit is directly above its dividend digit.');
    }
-   let board=`${' '.repeat(String(b).length+3)}${quot}\n${' '.repeat(String(b).length+2)}┌${'─'.repeat(digits.length+2)}\n${b} ) ${digits}`;
-   if(q.number===7){board='        275\n      ┌──────\n15  )  4125';steps=['15 does not go into 4, so start with 41.','41 ÷ 15 = 2, remainder 11.','Bring down 2: 112 ÷ 15 = 7, remainder 7.','Bring down 5: 75 ÷ 15 = 5, remainder 0.'];}
-   return wrap(b>9?'Long division (bus-stop layout)':'Bus-stop division',board,steps,String(a/b),'The quotient is placed above the digits. The remainder is carried into the next division step.');
+   // Multi-digit divisors: show the subtraction stages of long division, not just a bare bracket.
+   if(Number.isInteger(a)&&Number.isInteger(ans)&&b>9){
+    const digits=String(a),qdigits=String(ans),steps=[],rows=[];let rem=0,started=false;
+    for(let i=0;i<digits.length;i++){
+     const value=rem*10+Number(digits[i]),d=Math.floor(value/b);
+     if(d||started){started=true;const product=d*b;steps.push(`${value} ÷ ${b} = ${d}; ${d} × ${b} = ${product}; ${value} − ${product} = ${value-product}.`);rows.push(`${String(value).padStart(i+1)}\n${('− '+product).padStart(i+1)}\n${'─'.repeat(i+1)}`)}
+     rem=value%b;
+    }
+    const board=`${' '.repeat(String(b).length+3)}${qdigits}\n${' '.repeat(String(b).length+2)}┌${'─'.repeat(digits.length+1)}\n${b} ) ${digits}\n\n${rows.join('\n')}`;
+    return wrap('Long division',board,steps,q.answer,'Each subtraction shows the multiple of the divisor and the remainder before bringing down the next digit.');
+   }
+   if(raw.includes('.')&&b<=12){
+    const scaled=raw.replace('.',''),places=(raw.split('.')[1]||'').length;
+    const board=`${raw} ÷ ${b}\n${scaled} ÷ ${b} = ${Number(scaled)/b}\n${q.answer}`;
+    return wrap('Decimal division',board,[`Write the dividend with its decimal point: ${raw}.`,`Divide each place-value digit by ${b}, carrying remainders to the next column.`,`Put the decimal point in the quotient directly above the dividend decimal point.`],q.answer);
+   }
   }
  }
+ const col=text.match(/^([\d.]+)\s*([+−×])\s*([\d.]+)\s*=/);
  if(col){
-  let a=col[1],op=col[2],b=col[3];
+  const a=col[1],op=col[2],b=col[3];
   if(op==='+'||op==='−'){
-   const decimals=Math.max((a.split('.')[1]||'').length,(b.split('.')[1]||'').length);
-   const pad=v=>decimals?Number(v).toFixed(decimals):v;
-   const x=pad(a),y=pad(b),z=pad(q.answer.replace(/,/g,''));
-   const width=Math.max(x.length,y.length,z.length)+2;
-   const board=`${x.padStart(width)}\n${op} ${y.padStart(width-2)}\n${'─'.repeat(width)}\n${z.padStart(width)}`;
-   return wrap(op==='+'?'Column addition':'Column subtraction',board,[decimals?'Align the decimal points and add placeholder zeros where needed.':'Line up ones, tens, hundreds and thousands.',op==='+'?'Add from right to left, carrying when a column totals 10 or more.':'Subtract from right to left, exchanging when needed.',`Check: ${a} ${op} ${b} = ${q.answer}.`],q.answer);
+   const dp=Math.max((a.split('.')[1]||'').length,(b.split('.')[1]||'').length);
+   const x=dp?Number(a).toFixed(dp):a,y=dp?Number(b).toFixed(dp):b,z=dp?Number(q.answer.replace(/,/g,'')).toFixed(dp):q.answer.replace(/,/g,'');
+   const width=Math.max(x.length,y.length,z.length)+3;
+   let board=`${x.padStart(width)}\n${(op+' '+y).padStart(width)}\n${'─'.repeat(width)}\n${z.padStart(width)}`;
+   const steps=[];
+   if(op==='+'){
+    const xdigits=x.replace('.','').split('').reverse(),ydigits=y.replace('.','').split('').reverse();let carry=0,carryCols=[];
+    for(let i=0;i<Math.max(xdigits.length,ydigits.length);i++){let sum=Number(xdigits[i]||0)+Number(ydigits[i]||0)+carry;carry=Math.floor(sum/10);if(carry)carryCols.push(`Carry 1 into the next column after adding column ${i+1}.`)}
+    steps.push(...carryCols);if(!steps.length)steps.push('Add each column from right to left.');
+   }else{
+    let X=x.replace('.','').split('').reverse().map(Number),Y=y.replace('.','').split('').reverse().map(Number);for(let i=0;i<Y.length;i++)if(X[i]<Y[i]){let j=i+1;while(j<X.length&&X[j]===0)j++;if(j<X.length){X[j]--;for(let k=j-1;k>i;k--)X[k]+=9;X[i]+=10;steps.push(`Exchange 1 from the next available place-value column to subtract column ${i+1}.`);}}if(!steps.length)steps.push('Subtract each column from right to left.');
+   }
+   return wrap(op==='+'?'Column addition':'Column subtraction',board,steps,q.answer,dp?'Decimal points and placeholder zeros are aligned.':'Digits are aligned by place value.');
   }
   if(op==='×'&&!a.includes('.')&&!b.includes('.')&&Number(b)>=10){
-   const n=Number(a),m=Number(b),parts=String(m).split('').reverse().map((digit,i)=>n*Number(digit)*10**i),width=String(n*m).length+2;
+   const n=Number(a),m=Number(b),parts=String(m).split('').reverse().map((digit,i)=>n*Number(digit)*10**i),width=String(n*m).length+3;
    const board=[String(n).padStart(width),('× '+m).padStart(width),'─'.repeat(width),...parts.map(v=>String(v).padStart(width)),'─'.repeat(width),String(n*m).padStart(width)].join('\n');
-   const steps=parts.map((v,i)=>`Multiply by ${Number(String(m).split('').reverse()[i])*10**i}: ${v}.`);steps.push('Add the aligned partial products.');
-   return wrap('Column multiplication',board,steps,q.answer);
+   const steps=parts.map((v,i)=>`Multiply ${n} by ${Number(String(m).split('').reverse()[i])*10**i}: ${v}.`);steps.push('Add the aligned partial products.');
+   return wrap('Column multiplication',board,steps,q.answer,'The tens row includes a zero placeholder. Carry digits are used when multiplying each column.');
   }
  }
- return (q.working||[]).map(s=>`<div class="method-line">${escapeHtml(s)}</div>`).join('');
+ return fallback();
 }
 
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
